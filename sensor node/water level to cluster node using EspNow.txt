@@ -1,0 +1,102 @@
+#include <Arduino.h>
+#include <esp_now.h>
+#include <WiFi.h>
+
+// Receiver's MAC Address
+uint8_t receiverMac[] = {0xA0, 0xB7, 0x65, 0x0F, 0x69, 0x80};
+
+// Ultrasonic Sensor Pins
+const int trigPin = 5;
+const int echoPin = 18;
+
+void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
+  Serial.print("Last Packet Send Status: ");
+  Serial.println(status == ESP_NOW_SEND_SUCCESS ? "Delivery Success" : "Delivery Fail");
+}
+
+void setup() {
+  Serial.begin(115200);
+  
+  pinMode(trigPin, OUTPUT);
+  pinMode(echoPin, INPUT);
+  
+  // Set Wi-Fi to Station mode and disconnect from any network
+  WiFi.mode(WIFI_STA);
+  WiFi.disconnect();
+  delay(100); // Ensure Wi-Fi stabilizes
+  
+  // Initialize ESP-NOW
+  if (esp_now_init() != ESP_OK) {
+    Serial.println("Error initializing ESP-NOW");
+    ESP.restart(); // Restart if initialization fails
+    return;
+  }
+  
+  // Register send callback
+  esp_now_register_send_cb(OnDataSent);
+  
+  // Register peer
+  esp_now_peer_info_t peerInfo = {};
+  memcpy(peerInfo.peer_addr, receiverMac, 6);
+  peerInfo.channel = 0;  // Use channel 0 (default)
+  peerInfo.encrypt = false;
+  
+  if (esp_now_add_peer(&peerInfo) != ESP_OK) {
+    Serial.println("Failed to add peer");
+    ESP.restart(); // Restart on failure
+    return;
+  }
+  
+  Serial.println("ESP-NOW Setup Complete");
+}
+
+float getDistance() {
+  digitalWrite(trigPin, LOW);
+  delayMicroseconds(2);
+  digitalWrite(trigPin, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(trigPin, LOW);
+  
+  long duration = pulseIn(echoPin, HIGH);
+  float distance = (duration * 0.0343) / 2;
+  
+  // Ensure distance is within reasonable bounds
+  if (distance < 0) distance = 0;
+  if (distance > 500) distance = 500; // Arbitrary max distance (adjust as needed)
+  
+  return distance;
+}
+
+// Define Tank ID
+const char tankID[] = "Tank_0001";
+
+// Create a structure to hold the Tank ID and distance
+struct TankData {
+  char id[10];
+  float waterLevel;
+} tankData;
+
+void loop() {
+  float distance = getDistance();
+
+  // Populate the structure
+  strncpy(tankData.id, tankID, sizeof(tankData.id) - 1);
+  tankData.id[sizeof(tankData.id) - 1] = '\0'; // Ensure null-termination
+  tankData.waterLevel = distance;
+
+  // Send the TankData structure
+  esp_err_t result = esp_now_send(receiverMac, (uint8_t *)&tankData, sizeof(tankData));
+
+  if (result != ESP_OK) {
+    Serial.println("Error sending the data");
+  }
+
+  // Print for debugging
+  Serial.print("Tank ID: ");
+  Serial.print(tankData.id);
+  Serial.print(", Distance: ");
+  Serial.print(tankData.waterLevel);
+  Serial.println(" cm");
+
+  delay(2000); // Send every 2 seconds
+}
